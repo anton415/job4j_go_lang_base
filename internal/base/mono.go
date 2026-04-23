@@ -2,32 +2,24 @@ package base
 
 // Mono проверяет, является ли последовательность монотонной.
 func Mono(nums []int) bool {
-	// Если длина массива меньше или равна 2, то он считается монотонным.
-	if len(nums) <= 2 {
-		return true
+	direction := 0
+	if nums[0] < nums[1] {
+		direction = 1
 	}
-
-	// Определяем направление после первых различных элементов
-	direction := 0 // 0 - не определено, 1 - возрастает, -1 - убывает
-
+	if nums[0] > nums[1] {
+		direction = -1
+	}
+	// нужен цикл и оператор &&.
 	for i := 0; i < len(nums)-1; i++ {
-		if nums[i] < nums[i+1] {
-			switch direction {
-			case 0:
-				direction = 1 // возрастает
-			case -1:
-				return false // меняет направление с убывания на возрастание
-			}
-		} else if nums[i] > nums[i+1] {
-			switch direction {
-			case 0:
-				direction = -1 // убывает
-			case 1:
-				return false // меняет направление с возрастания на убывание
-			}
+		if nums[i] < nums[i+1] && direction != 1 {
+			return false
 		}
-		// Если равны - направление не меняется
+		if nums[i] > nums[i+1] && direction != -1 {
+			return false
+		}
+		if nums[i] == nums[i+1] && direction != 0 {
+			return false
+		}
 	}
-
 	return true
 }
