@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func Test_Put(t *testing.T) {
+func Test_Add(t *testing.T) {
 
 	rsl := base.Add(1, 2)
 	expected := 3
