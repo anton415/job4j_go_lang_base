@@ -1,0 +1,158 @@
+name: PR Metrics
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  report:
+    name: Quality Report
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install analysis tools
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      # ── Build ─────────────────────────────────────────────────────────────
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: go build ./...
+
+      # ── Tests & Coverage ──────────────────────────────────────────────────
+      - name: Test & Coverage
+        id: tests
+        continue-on-error: true
+        run: |
+          go test -json -coverprofile=coverage.out ./... > test-results.json 2>&1
+
+      # ── Lint ──────────────────────────────────────────────────────────────
+      - name: Lint
+        id: lint
+        continue-on-error: true
+        run: |
+          golangci-lint run --timeout 5m --out-format json ./... > lint-results.json 2>/dev/null
+
+      # ── Security scan ─────────────────────────────────────────────────────
+      - name: Security scan
+        id: security
+        continue-on-error: true
+        run: |
+          govulncheck ./... > vuln-results.txt 2>&1
+
+      # ── Compose markdown report ───────────────────────────────────────────
+      - name: Compose PR report
+        run: |
+          # Build
+          if [ "${{ steps.build.outcome }}" = "success" ]; then
+            BUILD_CELL="✅ Passed"
+          else
+            BUILD_CELL="❌ Failed"
+          fi
+
+          # Tests
+          PASS=0; FAIL=0; SKIP=0
+          if [ -f test-results.json ]; then
+            PASS=$(jq -rc 'select(.Action == "pass" and .Test != null)' test-results.json 2>/dev/null | wc -l | tr -d ' ')
+            FAIL=$(jq -rc 'select(.Action == "fail" and .Test != null)' test-results.json 2>/dev/null | wc -l | tr -d ' ')
+            SKIP=$(jq -rc 'select(.Action == "skip" and .Test != null)' test-results.json 2>/dev/null | wc -l | tr -d ' ')
+          fi
+          if [ "${{ steps.tests.outcome }}" = "success" ]; then
+            TESTS_CELL="✅ ${PASS} passed, ${SKIP} skipped"
+          else
+            TESTS_CELL="❌ ${FAIL} failed / ${PASS} passed"
+          fi
+
+          # Coverage
+          COVERAGE="—"
+          if [ -f coverage.out ]; then
+            COVERAGE=$(go tool cover -func=coverage.out 2>/dev/null | grep '^total:' | awk '{print $3}')
+          fi
+
+          # Lint
+          LINT_ISSUES=0
+          if [ -f lint-results.json ]; then
+            LINT_ISSUES=$(jq '.Issues // [] | length' lint-results.json 2>/dev/null || echo 0)
+          fi
+          if [ "${LINT_ISSUES}" -gt 0 ] 2>/dev/null; then
+            LINT_CELL="⚠️ ${LINT_ISSUES} issue(s)"
+          else
+            LINT_CELL="✅ No issues"
+          fi
+
+          # Security
+          if [ "${{ steps.security.outcome }}" = "success" ]; then
+            SEC_CELL="✅ No vulnerabilities"
+          else
+            SEC_CELL="🚨 Issues found"
+          fi
+
+          # Write table
+          {
+            echo "<!-- pr-metrics-report -->"
+            echo "## PR Quality Report"
+            echo ""
+            echo "| Check | Status |"
+            echo "|-------|--------|"
+            echo "| Build | ${BUILD_CELL} |"
+            echo "| Tests | ${TESTS_CELL} |"
+            echo "| Coverage | **${COVERAGE}** |"
+            echo "| Lint | ${LINT_CELL} |"
+            echo "| Security | ${SEC_CELL} |"
+            echo ""
+          } > report.md
+
+          # Lint details (collapsible)
+          if [ "${LINT_ISSUES}" -gt 0 ] 2>/dev/null; then
+            {
+              echo "<details>"
+              echo "<summary>Lint issues (${LINT_ISSUES})</summary>"
+              echo ""
+              echo "\`\`\`"
+              jq -r '.Issues[] | "\(.Pos.Filename):\(.Pos.Line)  [\(.FromLinter)]  \(.Text)"' \
+                lint-results.json 2>/dev/null | head -30
+              echo "\`\`\`"
+              echo "</details>"
+              echo ""
+            } >> report.md
+          fi
+
+          # Security details (collapsible, only on failure)
+          if [ "${{ steps.security.outcome }}" != "success" ]; then
+            {
+              echo "<details>"
+              echo "<summary>Vulnerability details</summary>"
+              echo ""
+              echo "\`\`\`"
+              cat vuln-results.txt 2>/dev/null || echo "No details available"
+              echo "\`\`\`"
+              echo "</details>"
+              echo ""
+            } >> report.md
+          fi
+
+          # Footer
+          {
+            echo "---"
+            echo "*Updated: $(date -u '+%Y-%m-%d %H:%M UTC') · Commit: \`${GITHUB_SHA:0:7}\`*"
+          } >> report.md
+
+      # ── Post / update sticky comment ──────────────────────────────────────
+      - name: Sticky PR comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-metrics
+          path: report.md
