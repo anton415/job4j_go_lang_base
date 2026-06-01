@@ -26,7 +26,7 @@ func (u UpdateUsecase) Done(in Input, out Output, tracker *Tracker) {
 	id := in.Get()
 	out.Out("enter new name:")
 	name := in.Get()
-	tracker.UpdateItem(id, name)
+	tracker.UpdateItem(Item{ID: id, Name: name})
 }
 
 type DeleteUsecase struct{}
